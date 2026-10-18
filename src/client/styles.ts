@@ -207,14 +207,70 @@ const STYLES = `
   min-width: 0;
 }
 .dww-breadcrumb {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
   padding: 0 4px;
+  min-width: 0;
   font-size: 12px;
   line-height: 18px;
   color: var(--dsw-alias-label-tertiary);
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
 }
+/* Breadcrumb segments are buttons: a deep path can be walked back without the tree. */
+.dww-breadcrumb-link {
+  max-width: 160px;
+  overflow: hidden;
+  padding: 0 2px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dww-breadcrumb-link:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+.dww-breadcrumb-sep { color: var(--dsw-alias-label-tertiary); }
+/* Quick-start paths: the places a WSL workspace usually lives, one click away. */
+.dww-quick {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 4px;
+}
+.dww-quick-label { font-size: 12px; color: var(--dsw-alias-label-tertiary); }
+.dww-quick-chip {
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 20px;
+}
+.dww-quick-chip:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+.dww-quick-chip:disabled { cursor: default; opacity: 0.55; }
+/* Inline path-check answer, next to the field it is about. */
+.dww-path-status {
+  padding: 0 2px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-tertiary);
+}
+.dww-path-status--ok { color: var(--dsw-alias-state-business-primary); }
+.dww-path-status--invalid { color: var(--dsw-alias-state-error-primary); }
 .dww-dir-row {
   display: flex;
   align-items: center;
@@ -233,6 +289,13 @@ const STYLES = `
 .dww-dir-row:disabled { cursor: default; color: var(--dsw-alias-label-tertiary); }
 .dww-dir-row--up { color: var(--dsw-alias-label-secondary); }
 .dww-dir-row svg { flex: none; color: var(--dsw-alias-label-tertiary); }
+.dww-dir-go {
+  flex: none;
+  margin-left: auto;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 15px;
+  line-height: 1;
+}
 .dww-dir-empty {
   padding: 8px;
   font-size: 12px;

@@ -9,7 +9,7 @@
  */
 
 import type * as React from 'react'
-import { useEffect, useRef, useState, type UIEventHandler } from 'react'
+import { Fragment, useEffect, useRef, useState, type UIEventHandler } from 'react'
 import { isAbsoluteLinuxPath, isValidWslUsername, normalizeLinuxPath } from '../shared/paths.ts'
 import type { WslDirListing, WslPathCheck, WslSelfDescription } from './api.ts'
 import { WslHelp } from './help.tsx'
@@ -69,6 +69,39 @@ export function dirChildPath(parent: string, name: string): string {
   return parent === '/' ? `/${name}` : `${parent}/${name}`
 }
 
+/**
+ * Split an absolute Linux path into clickable breadcrumb segments, each with
+ * the path it navigates to. The root is its own crumb, so a deep path can be
+ * walked back one level at a time without using the tree.
+ * @param path - an absolute Linux path (`/`, `/home`, `/home/me/proj`).
+ * @returns one entry per segment, root first.
+ */
+export function pathSegments(path: string): { label: string; path: string }[] {
+  const segments = path.split('/').filter(segment => segment !== '')
+  const result: { label: string; path: string }[] = [{ label: '/', path: '/' }]
+  let current = ''
+  for (const segment of segments) {
+    current += `/${segment}`
+    result.push({ label: segment, path: current })
+  }
+  return result
+}
+
+/**
+ * The quick-start paths offered beside the browse box: where a WSL workspace
+ * usually lives. Clicking one browses it; a path the distribution does not
+ * mount answers with the ordinary browse error rather than a silent no-op.
+ */
+const QUICK_PATHS: { label: string; path: string }[] = [
+  { label: '/', path: '/' },
+  { label: '/home', path: '/home' },
+  { label: '/tmp', path: '/tmp' },
+  { label: '/mnt/c', path: '/mnt/c' },
+]
+
+/** How the path box's inline check reads: nothing, in flight, usable, rejected. */
+type PathStatus = 'idle' | 'checking' | 'ok' | 'invalid'
+
 /** A tiny inline terminal glyph for the dialog's directory rows. */
 function WslGlyph({ size = 16 }: { size?: number }): React.ReactElement {
   return (
@@ -94,6 +127,9 @@ export function AddWslWorkspace({ wide, t, describe, checkPreset, listDistros, l
   const [listing, setListing] = useState<WslDirListing | null>(null)
   const [browsePath, setBrowsePath] = useState('/')
   const [browsing, setBrowsing] = useState(false)
+  const [browseFailed, setBrowseFailed] = useState(false)
+  const [pathStatus, setPathStatus] = useState<PathStatus>('idle')
+  const [pathNote, setPathNote] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   // The "?" panel: help text plus the compatibility list the host reports.
@@ -108,11 +144,17 @@ export function AddWslWorkspace({ wide, t, describe, checkPreset, listDistros, l
     setBrowsePath(root)
     try {
       const value = await listDir(targetDistro, root)
-      if (seq === browseSeq.current) setListing(value)
+      if (seq === browseSeq.current) {
+        setListing(value)
+        setBrowseFailed(false)
+      }
     } catch {
-      // A failed browse (permission, missing dir) is non-fatal: keep old listing.
+      // A failed browse (permission, missing dir) is non-fatal: drop the stale
+      // listing and let the browse box say why instead of pretending the level
+      // is empty.
       if (seq === browseSeq.current) {
         setListing(null)
+        setBrowseFailed(true)
         setError((previous) => previous ?? t('error.loadDir'))
       }
     } finally {
@@ -182,6 +224,8 @@ export function AddWslWorkspace({ wide, t, describe, checkPreset, listDistros, l
     if (!open) return
     let cancelled = false
     setError(null)
+    setPathStatus('idle')
+    setPathNote(null)
     runOpenPass(() => cancelled)
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run once per open against current t.
@@ -212,42 +256,67 @@ export function AddWslWorkspace({ wide, t, describe, checkPreset, listDistros, l
     )
   }
 
-  const onDrill = (name: string): void => {
-    const next = dirChildPath(listing?.path ?? browsePath, name)
+  /**
+   * Move the browse box and the path input to one directory: breadcrumb
+   * segment, quick path, or tree drill. The inline check is dropped because the
+   * answer belonged to the previous path, not this one.
+   * @param next - the absolute Linux directory to browse.
+   */
+  const goToPath = (next: string): void => {
     setPathInput(next)
+    setPathStatus('idle')
+    setPathNote(null)
     void refreshBrowse(next, distro)
+  }
+
+  const onDrill = (name: string): void => {
+    goToPath(dirChildPath(listing?.path ?? browsePath, name))
   }
 
   const onUp = (): void => {
     const parent = listing?.parent ?? null
     if (parent === null) return
-    setPathInput(parent)
-    void refreshBrowse(parent, distro)
+    goToPath(parent)
   }
 
   const onDistroChange = (value: string): void => {
     setDistro(value)
+    setPathStatus('idle')
+    setPathNote(null)
     void refreshBrowse(browsePath, value)
   }
 
+  /**
+   * Check the typed path. The answer is shown inline under the input rather
+   * than only in the dialog's error strip: "which of these two fields is
+   * wrong" is the question a reader has at that moment, and replacing the
+   * whole form with an error banner made the path field look unchanged.
+   */
   const onCheck = async (): Promise<void> => {
     const path = normalizeLinuxPath(pathInput)
     setError(null)
     if (!isAbsoluteLinuxPath(path) || path === '/') {
-      setError(t('error.invalidPath'))
+      setPathStatus('invalid')
+      setPathNote(t('error.invalidPath'))
       return
     }
+    setPathStatus('checking')
+    setPathNote(null)
     let facts: WslPathCheck
     try {
       facts = await check(distro, path)
     } catch {
-      setError(t('error.pathNotFound'))
+      setPathStatus('invalid')
+      setPathNote(t('error.pathNotFound'))
       return
     }
     if (!facts.exists || !facts.isDirectory) {
-      setError(t('error.pathNotFound'))
+      setPathStatus('invalid')
+      setPathNote(t('error.pathNotFound'))
       return
     }
+    setPathStatus('ok')
+    setPathNote(t('dialog.pathOk'))
     void refreshBrowse(path, distro)
   }
 
@@ -346,12 +415,39 @@ export function AddWslWorkspace({ wide, t, describe, checkPreset, listDistros, l
                 value={pathInput}
                 placeholder={t('dialog.pathPlaceholder')}
                 disabled={opening || busy}
-                onChange={event => setPathInput(event.target.value)}
+                onChange={event => {
+                  setPathInput(event.target.value)
+                  setPathStatus('idle')
+                  setPathNote(null)
+                }}
+                onKeyDown={event => {
+                  if (event.key !== 'Enter') return
+                  event.preventDefault()
+                  if (!opening && !busy && pathStatus !== 'checking') void onCheck()
+                }}
               />
-              <button type="button" className="dww-check-btn" disabled={opening || busy} onClick={() => void onCheck()}>
-                {t('dialog.check')}
+              <button
+                type="button"
+                className="dww-check-btn"
+                disabled={opening || busy || pathStatus === 'checking'}
+                onClick={() => void onCheck()}
+              >
+                {pathStatus === 'checking' ? t('dialog.checking') : t('dialog.check')}
               </button>
             </div>
+            {pathStatus !== 'idle' ? (
+              <div
+                className={pathStatus === 'ok'
+                  ? 'dww-path-status dww-path-status--ok'
+                  : pathStatus === 'invalid'
+                    ? 'dww-path-status dww-path-status--invalid'
+                    : 'dww-path-status'}
+                role="status"
+                aria-live="polite"
+              >
+                {pathStatus === 'checking' ? t('dialog.checking') : pathNote}
+              </div>
+            ) : null}
           </div>
           <div className="dww-field">
             <label className="dww-field-label" htmlFor="dww-username">{t('dialog.username')}</label>
@@ -364,29 +460,65 @@ export function AddWslWorkspace({ wide, t, describe, checkPreset, listDistros, l
               autoComplete="off"
               spellCheck={false}
               onChange={event => setUsername(event.target.value)}
+              onKeyDown={event => {
+                if (event.key !== 'Enter') return
+                event.preventDefault()
+                if (!opening && !busy) void onConfirm()
+              }}
             />
           </div>
           <div className="dww-feedback">
-            <div className="dww-breadcrumb">{browsePath}</div>
+            <div className="dww-breadcrumb">
+              {pathSegments(browsePath).map((segment, index) => (
+                <Fragment key={segment.path}>
+                  {index > 0 ? <span className="dww-breadcrumb-sep">/</span> : null}
+                  <button
+                    type="button"
+                    className="dww-breadcrumb-link"
+                    title={segment.path}
+                    onClick={() => goToPath(segment.path)}
+                  >
+                    {index === 0 ? t('dialog.breadcrumbRoot') : segment.label}
+                  </button>
+                </Fragment>
+              ))}
+            </div>
+            <div className="dww-quick">
+              <span className="dww-quick-label">{t('dialog.quick')}</span>
+              {QUICK_PATHS.map(item => (
+                <button
+                  key={item.path}
+                  type="button"
+                  className="dww-quick-chip"
+                  disabled={opening || busy || distro === ''}
+                  onClick={() => goToPath(item.path)}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
             <div className="dww-dirlist" onScroll={listScroll}>
-              {browsing ? <div className="dww-dir-empty">{t('dialog.loading')}</div> : (
-                listing?.parent !== null && listing !== null
-                  ? (
-                    <button type="button" className="dww-dir-row dww-dir-row--up" onClick={onUp}>
-                      <WslGlyph size={14} />
-                      <span>{t('dialog.upLevel')}</span>
-                    </button>
-                  )
-                  : null
-              )}
-              {!browsing && (children.length === 0)
-                ? <div className="dww-dir-empty">{t('dialog.browseEmpty')}</div>
-                : children.map(name => (
+              {browsing ? (
+                <div className="dww-dir-empty">{t('dialog.loading')}</div>
+              ) : (<>
+                {listing !== null && listing.parent !== null ? (
+                  <button type="button" className="dww-dir-row dww-dir-row--up" onClick={onUp}>
+                    <WslGlyph size={14} />
+                    <span>{t('dialog.upLevel')}</span>
+                  </button>
+                ) : null}
+                {browseFailed ? <div className="dww-dir-empty">{t('error.loadDir')}</div> : null}
+                {!browseFailed && children.length === 0
+                  ? <div className="dww-dir-empty">{t('dialog.browseEmpty')}</div>
+                  : null}
+                {browseFailed ? null : children.map(name => (
                   <button type="button" key={name} className="dww-dir-row" onClick={() => onDrill(name)}>
                     <WslGlyph size={14} />
                     <span>{name}</span>
+                    <span className="dww-dir-go" aria-hidden="true">›</span>
                   </button>
                 ))}
+              </>)}
             </div>
           </div>
           </>)}
